@@ -1,0 +1,9 @@
+target
+*.zip
+*.log
+*.mv.db
+.idea
+.vscode
+# Nunca dentro de la imagen: la llave va como variable secreta en Render
+*-firebase-adminsdk-*.json
+service-account*.json

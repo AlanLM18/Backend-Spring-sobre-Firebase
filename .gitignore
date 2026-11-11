@@ -1,0 +1,9 @@
+target/
+*.log
+*.mv.db
+.idea/
+.vscode/
+.env
+# Llave de la cuenta de servicio de Firebase: NUNCA en git (va como variable secreta en Render)
+*-firebase-adminsdk-*.json
+service-account*.json
