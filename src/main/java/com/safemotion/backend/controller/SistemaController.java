@@ -43,6 +43,7 @@ public class SistemaController {
         }
         e.put("firestore", ok ? "disponible" : "sin respuesta");
         e.put("latenciaFirestoreMs", Math.round((System.nanoTime() - t0) / 1e5) / 10.0);
+        e.put("operaciones", com.safemotion.backend.service.Metricas.resumen());
         return e;
     }
 }

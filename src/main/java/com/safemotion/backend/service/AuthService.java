@@ -71,6 +71,7 @@ public class AuthService {
         String token = header.startsWith("Bearer ") ? header.substring(7).trim() : header.trim();
         FirebaseToken t;
         try {
+            Metricas.VERIFICACIONES_TOKEN.incrementAndGet();
             t = auth.verifyIdToken(token, true);   // true: rechaza tokens revocados (logout / cuenta deshabilitada)
         } catch (FirebaseAuthException | IllegalArgumentException e) {
             throw ApiException.noAutenticado();
@@ -93,6 +94,7 @@ public class AuthService {
 
     /** Perfil de usuarios/{uid}. Una cuenta sin perfil o deshabilitada no puede operar (403). */
     public Sesion perfil(String uid) {
+        Metricas.LECTURAS_PERFIL.incrementAndGet();
         DocumentSnapshot d = FirestoreUtil.get(db.collection("usuarios").document(uid));
         if (!d.exists()) throw new ApiException(HttpStatus.FORBIDDEN, "Tu cuenta no tiene perfil en SafeMotion");
         if (Boolean.FALSE.equals(d.getBoolean("habilitado"))) throw new ApiException(HttpStatus.FORBIDDEN, "Esta cuenta está deshabilitada");

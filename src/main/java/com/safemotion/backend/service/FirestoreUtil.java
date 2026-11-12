@@ -40,8 +40,8 @@ public final class FirestoreUtil {
         }
     }
 
-    public static DocumentSnapshot get(DocumentReference ref) { return esperar(ref.get()); }
-    public static QuerySnapshot get(Query q) { return esperar(q.get()); }
+    public static DocumentSnapshot get(DocumentReference ref) { Metricas.LECTURAS_FIRESTORE.incrementAndGet(); return esperar(ref.get()); }
+    public static QuerySnapshot get(Query q) { Metricas.LECTURAS_FIRESTORE.incrementAndGet(); return esperar(q.get()); }
 
     public static String iso(Object v) {
         return v instanceof Timestamp t ? t.toDate().toInstant().toString() : (v == null ? null : v.toString());
