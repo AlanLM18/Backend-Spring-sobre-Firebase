@@ -22,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Sesión con Firebase Authentication.
@@ -29,6 +30,12 @@ import java.util.Map;
  * dashboard y el reloj) y se inicia sesión con la API REST de Identity Toolkit. El token que se devuelve es el ID token
  * de Firebase (caduca en 1 h); cada petición lo verifica con el Admin SDK, incluido si fue revocado (logout o cuenta
  * deshabilitada), y vuelve a leer el perfil para aplicar el rol y el estado actuales.
+ *
+ * Optimización (Práctica 12): el resultado de verificar un token (su sesión con rol) se guarda en una caché en
+ * memoria durante app.auth.cache-ttl-segundos (30 s por defecto, nunca más allá de la caducidad del token).
+ * Así una petición autenticada ya no hace 2 llamadas remotas (Firebase Auth + usuarios/{uid}) cada vez.
+ * El logout y la deshabilitación hechos por esta API invalidan la caché de inmediato; un cambio hecho por fuera
+ * (p. ej. desde el dashboard directo en Firestore) se aplica en a lo más 30 s.
  */
 @Service
 public class AuthService {
@@ -43,13 +50,21 @@ public class AuthService {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build();
     private final ObjectMapper json = new ObjectMapper();
 
+    // ---- caché de sesiones verificadas (token -> sesión) ----
+    private record Entrada(Sesion sesion, long venceMs) { }
+    private static final int MAX_ENTRADAS = 10_000;
+    private final Map<String, Entrada> cache = new ConcurrentHashMap<>();
+    private final long ttlMs;
+
     public AuthService(FirebaseAuth auth, Firestore db,
                        @Value("${app.firebase.api-key}") String apiKey,
-                       @Value("${app.firebase.referer}") String referer) {
+                       @Value("${app.firebase.referer}") String referer,
+                       @Value("${app.auth.cache-ttl-segundos:30}") long ttlSegundos) {
         this.auth = auth;
         this.db = db;
         this.apiKey = apiKey;
         this.referer = referer;
+        this.ttlMs = Math.max(0, ttlSegundos) * 1000;
     }
 
     public static String correoDePin(String pin) { return pin + "@" + DOMINIO_PIN; }
@@ -69,15 +84,40 @@ public class AuthService {
     public Sesion autenticar(String header) {
         if (header == null || header.isBlank()) throw ApiException.noAutenticado();
         String token = header.startsWith("Bearer ") ? header.substring(7).trim() : header.trim();
+        long ahora = System.currentTimeMillis();
+        Entrada e = ttlMs > 0 ? cache.get(token) : null;
+        if (e != null && e.venceMs() > ahora) {
+            Metricas.ACIERTOS_CACHE.incrementAndGet();
+            return e.sesion();
+        }
         FirebaseToken t;
         try {
             Metricas.VERIFICACIONES_TOKEN.incrementAndGet();
             t = auth.verifyIdToken(token, true);   // true: rechaza tokens revocados (logout / cuenta deshabilitada)
-        } catch (FirebaseAuthException | IllegalArgumentException e) {
+        } catch (FirebaseAuthException | IllegalArgumentException ex) {
+            cache.remove(token);
             throw ApiException.noAutenticado();
         }
-        return perfil(t.getUid());
+        Sesion s = perfil(t.getUid());          // 403 si está deshabilitada: no se guarda en caché
+        if (ttlMs > 0) guardar(token, s, Math.min(ahora + ttlMs, caducidadMs(t, ahora + ttlMs)));
+        return s;
     }
+
+    private static long caducidadMs(FirebaseToken t, long porDefecto) {
+        Object exp = t.getClaims().get("exp");
+        return exp instanceof Number n ? n.longValue() * 1000 : porDefecto;
+    }
+
+    private void guardar(String token, Sesion s, long venceMs) {
+        if (cache.size() >= MAX_ENTRADAS) {
+            long ahora = System.currentTimeMillis();
+            cache.values().removeIf(x -> x.venceMs() <= ahora);
+            if (cache.size() >= MAX_ENTRADAS) cache.clear();   // límite de memoria: nunca crece sin control
+        }
+        cache.put(token, new Entrada(s, venceMs));
+    }
+
+    public int sesionesEnCache() { return cache.size(); }
 
     public void logout(String header) {
         Sesion s = autenticar(header);
@@ -85,6 +125,7 @@ public class AuthService {
     }
 
     public void revocar(String uid) {
+        cache.values().removeIf(x -> x.sesion().uid().equals(uid));   // efecto inmediato en esta instancia
         try {
             auth.revokeRefreshTokens(uid);
         } catch (FirebaseAuthException e) {

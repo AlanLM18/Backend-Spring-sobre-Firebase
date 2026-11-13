@@ -35,8 +35,9 @@ public class EmergenciaController {
     }
 
     @GetMapping
-    public List<Map<String, Object>> listar(@RequestHeader(value = "Authorization", required = false) String token) {
-        return atencion.emergencias(auth.autenticar(token));
+    public List<Map<String, Object>> listar(@RequestHeader(value = "Authorization", required = false) String token,
+                                           @RequestParam(defaultValue = "50") int limite) {
+        return atencion.emergencias(auth.autenticar(token), limite);
     }
 
     @GetMapping("/doctores")

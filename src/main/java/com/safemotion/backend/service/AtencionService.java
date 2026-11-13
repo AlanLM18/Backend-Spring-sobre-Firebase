@@ -143,11 +143,25 @@ public class AtencionService {
     }
 
     /** Paciente: las suyas. Recepción, doctor y admin: todas. Lo más reciente primero. */
-    public List<Map<String, Object>> emergencias(Sesion s) {
-        Query q = Reglas.esPersonal(s.rol())
-                ? db.collection("emergencias")
-                : db.collection("emergencias").whereEqualTo("pacienteId", s.uid());
-        List<Map<String, Object>> l = new ArrayList<>(get(q).getDocuments().stream().map(FirestoreUtil::json).toList());
+    /**
+     * Paciente: sus SOS. Recepción, doctor y admin: TODOS los SOS activos (ABIERTA/CANALIZADA, que nunca se pueden
+     * ocultar) más los `limite` más recientes del historial. Optimización (Práctica 12): antes se descargaba la
+     * colección completa en cada consulta; ahora son dos consultas acotadas con índices de un solo campo (estado y
+     * fecha), sin índice compuesto.
+     */
+    public List<Map<String, Object>> emergencias(Sesion s, int limite) {
+        if (limite < 1 || limite > 200) throw new ApiException(HttpStatus.BAD_REQUEST, "limite debe estar entre 1 y 200");
+        Map<String, Map<String, Object>> porId = new LinkedHashMap<>();
+        if (Reglas.esPersonal(s.rol())) {
+            get(db.collection("emergencias").whereIn("estado", List.of(Reglas.ABIERTA, Reglas.CANALIZADA)))
+                    .getDocuments().forEach(d -> porId.put(d.getId(), json(d)));
+            get(db.collection("emergencias").orderBy("fecha", Query.Direction.DESCENDING).limit(limite))
+                    .getDocuments().forEach(d -> porId.putIfAbsent(d.getId(), json(d)));
+        } else {
+            get(db.collection("emergencias").whereEqualTo("pacienteId", s.uid()))
+                    .getDocuments().forEach(d -> porId.put(d.getId(), json(d)));
+        }
+        List<Map<String, Object>> l = new ArrayList<>(porId.values());
         l.sort(Comparator.comparing((Map<String, Object> e) -> String.valueOf(e.get("fecha"))).reversed());
         return l;
     }
